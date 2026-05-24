@@ -3,32 +3,33 @@ const axios = require("axios");
 
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true })); // Kommo trimite form-urlencoded
 
-// ─── CONFIG ────────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђ CONFIG в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 const CONFIG = {
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   KOMMO_API_KEY: process.env.KOMMO_API_KEY,
-  KOMMO_SUBDOMAIN: process.env.KOMMO_SUBDOMAIN, // ex: "motiv" din motiv.kommo.com
+  KOMMO_SUBDOMAIN: process.env.KOMMO_SUBDOMAIN,
   PORT: process.env.PORT || 3000,
 };
 
-// ─── BAZA DE CUNOȘTINȚE MOTIV ───────────────────────────────────────────────
+// в”Ђв”Ђв”Ђ BAZA DE CUNOИTINИљE MOTIV в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 const MOTIV_KNOWLEDGE = `
-Ești asistentul virtual al MOTIV — companie din Moldova specializată în personalizarea hainelor și accesoriilor.
+E™ti asistentul virtual al MOTIV вЂ” companie din Moldova specializatДѓ Г®n personalizarea hainelor И™i accesoriilor.
 Site retail: motiv.md | Site corporate: business.motiv.md
 Slogan: "Fii DIFERIT. Fii UNIC."
 
-PRODUSE ȘI PREȚURI:
+PRODUSE ИI PREИљURI:
 - Tricouri personalizate: 250-340 MDL
 - Hanorace personalizate: 450-690 MDL
-- Pulovere, polo, accesorii (căciuli, șepci, rucsacuri, torbe, șorțuri, sticle)
+- Pulovere, polo, accesorii (cДѓciuli, И™epci, rucsacuri, torbe, И™orИ›uri, sticle)
 - Constructor online pe site pentru design personalizat
 
-COMENZI ȘI LIVRARE:
-- Livrare în toată Moldova
-- Comenzi retail (cantitate mică): motiv.md
+COMENZI ИI LIVRARE:
+- Livrare Г®n toatДѓ Moldova
+- Comenzi retail (cantitate micДѓ): motiv.md
 - Comenzi corporate/en-gros (minim 10 buc): business.motiv.md
-- Ofertă: 50 MDL reducere la prima comandă
+- OfertДѓ: 50 MDL reducere la prima comandДѓ
 
 PERSONALIZARE:
 - Design-uri unice prin constructorul online
@@ -36,29 +37,21 @@ PERSONALIZARE:
 - Print, broderie, transfer termic
 
 RETUR:
-- Retur acceptat în 14 zile de la primire
-- Produsele personalizate nu se returnează (excepție: defect de producție)
+- Retur acceptat Г®n 14 zile de la primire
+- Produsele personalizate nu se returneazДѓ (excepИ›ie: defect de producИ›ie)
 
 REGULI DE COMPORTAMENT:
-- Detectează automat limba clientului (română sau rusă) și răspunde în ACEEAȘI limbă
-- Fii prietenos, tineresc, cu umor ușor — ca un prieten care recomandă ceva cool
-- Folosește emoji moderat (1-2 per mesaj)
-- Dacă nu știi răspunsul exact, spune că un coleg va reveni în scurt timp
-- Nu inventa prețuri sau informații pe care nu le ai
-- Dacă clientul vrea comandă corporate (10+ bucăți), direcționează spre business.motiv.md
-- Dacă clientul vrea comandă retail, direcționează spre motiv.md
-- Răspunsurile să fie scurte și clare (max 3-4 propoziții)
+- DetecteazДѓ automat limba clientului (romГўnДѓ sau rusДѓ) И™i rДѓspunde Г®n ACEEAИI limbДѓ
+- Fii prietenos, tineresc, cu umor uИ™or вЂ” ca un prieten care recomandДѓ ceva cool
+- FoloseИ™te emoji moderat (1-2 per mesaj)
+- DacДѓ nu И™tii rДѓspunsul exact, spune cДѓ un coleg va reveni Г®n scurt timp
+- Nu inventa preИ›uri sau informaИ›ii pe care nu le ai
+- DacДѓ clientul vrea comandДѓ corporate (10+ bucДѓИ›i), direcИ›ioneazДѓ spre business.motiv.md
+- DacДѓ clientul vrea comandДѓ retail, direcИ›ioneazДѓ spre motiv.md
+- RДѓspunsurile sДѓ fie scurte И™i clare (max 3-4 propoziИ›ii)
 `;
 
-// ─── DETECTEAZĂ DACĂ MESAJUL NECESITĂ RĂSPUNS ──────────────────────────────
-function shouldRespond(message) {
-  if (!message || message.trim().length === 0) return false;
-  // Nu răspunde la mesaje de sistem sau notificări
-  const systemPhrases = ["a creat lead", "a schimbat", "a adăugat", "изменил", "создал"];
-  return !systemPhrases.some((phrase) => message.toLowerCase().includes(phrase));
-}
-
-// ─── GENEREAZĂ RĂSPUNS CU CLAUDE ───────────────────────────────────────────
+// в”Ђв”Ђв”Ђ GENEREAZД‚ RД‚SPUNS CU CLAUDE в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 async function generateReply(customerMessage) {
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -76,31 +69,16 @@ async function generateReply(customerMessage) {
   });
 
   const data = await response.json();
-
-  if (data.error) {
-    console.error("Claude API error:", data.error);
-    throw new Error(data.error.message);
-  }
-
+  if (data.error) throw new Error(data.error.message);
   return data.content[0].text;
 }
 
-// ─── TRIMITE MESAJ ÎNAPOI ÎN KOMMO ─────────────────────────────────────────
+// в”Ђв”Ђв”Ђ TRIMITE MESAJ ГЋNAPOI ГЋN KOMMO в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 async function sendMessageToKommo(leadId, message) {
   const url = `https://${CONFIG.KOMMO_SUBDOMAIN}.kommo.com/api/v4/leads/${leadId}/notes`;
-
-  const payload = {
-    add: [
-      {
-        note_type: "common",
-        params: {
-          text: message,
-        },
-      },
-    ],
-  };
-
-  await axios.post(url, payload, {
+  await axios.post(url, {
+    add: [{ note_type: "common", params: { text: message } }],
+  }, {
     headers: {
       Authorization: `Bearer ${CONFIG.KOMMO_API_KEY}`,
       "Content-Type": "application/json",
@@ -108,67 +86,73 @@ async function sendMessageToKommo(leadId, message) {
   });
 }
 
-// ─── WEBHOOK ENDPOINT ───────────────────────────────────────────────────────
-// Middleware să captureze raw body
-app.use("/webhook", (req, res, next) => {
-  let raw = "";
-  req.on("data", (chunk) => (raw += chunk));
-  req.on("end", () => {
-    req.rawBody = raw;
-    next();
-  });
-});
+// в”Ђв”Ђв”Ђ EXTRAGE MESAJ DIN ORICE FORMAT KOMMO в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+function extractFromPayload(body) {
+  console.log("рџ”Ќ Body complet:", JSON.stringify(body, null, 2));
 
+  // Format 1: message[0][text] + message[0][element_id] (form-urlencoded)
+  if (body.message) {
+    const msgs = Array.isArray(body.message) ? body.message : [body.message];
+    for (const m of msgs) {
+      const text = m.text || m.params?.text;
+      const leadId = m.lead?.id || m.entity_id || m.element_id;
+      if (text && leadId) return { text, leadId };
+    }
+  }
+
+  // Format 2: leads[update][0][id] sau leads[add][0][id]
+  const leads = body.leads?.update || body.leads?.add || [];
+  for (const lead of leads) {
+    if (lead.id) return { leadId: lead.id, text: null };
+  }
+
+  // Format 3: chei plate (Kommo uneori trimite flat)
+  const keys = Object.keys(body);
+  console.log("рџ”‘ Chei gДѓsite:", keys);
+
+  return null;
+}
+
+// в”Ђв”Ђв”Ђ WEBHOOK ENDPOINT в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 app.post("/webhook", async (req, res) => {
   try {
-    const body = req.body;
-    console.log("📩 Headers:", JSON.stringify(req.headers, null, 2));
-    console.log("📩 Raw body:", req.rawBody);
-    console.log("📩 Parsed body:", JSON.stringify(body, null, 2));
+    console.log("рџ“© Content-Type:", req.headers["content-type"]);
+    console.log("рџ“© Body raw:", JSON.stringify(req.body));
 
-    // Kommo trimite events de tip "message" sau "lead"
-    const events = body?.leads?.update || body?.leads?.add || [];
-    const messages = body?.message || [];
+    const extracted = extractFromPayload(req.body);
 
-    // Procesăm mesajele noi
-    const incomingMessages = Array.isArray(messages) ? messages : [messages];
-
-    for (const msg of incomingMessages) {
-      const text = msg?.text || msg?.params?.text;
-      const leadId = msg?.lead?.id || msg?.entity_id;
-
-      if (!text || !leadId) continue;
-      if (!shouldRespond(text)) continue;
-
-      console.log(`💬 Mesaj de la client (lead #${leadId}): ${text}`);
-
-      // Generăm răspuns cu Claude
-      const reply = await generateReply(text);
-      console.log(`🤖 Răspuns Claude: ${reply}`);
-
-      // Trimitem răspunsul în Kommo
-      await sendMessageToKommo(leadId, reply);
-      console.log(`✅ Răspuns trimis în Kommo pentru lead #${leadId}`);
+    if (!extracted) {
+      console.log("вљ пёЏ Nu s-au gДѓsit date utilizabile Г®n payload");
+      return res.json({ status: "ok", note: "no actionable data" });
     }
+
+    const { text, leadId } = extracted;
+
+    if (!text) {
+      console.log("вљ пёЏ Mesaj fДѓrДѓ text, ignorat");
+      return res.json({ status: "ok", note: "no text" });
+    }
+
+    console.log(`рџ’¬ Mesaj (lead #${leadId}): ${text}`);
+
+    const reply = await generateReply(text);
+    console.log(`рџ¤– RДѓspuns Claude: ${reply}`);
+
+    await sendMessageToKommo(leadId, reply);
+    console.log(`вњ… RДѓspuns trimis pentru lead #${leadId}`);
 
     res.json({ status: "ok" });
   } catch (error) {
-    console.error("❌ Eroare webhook:", error.message);
+    console.error("вќЊ Eroare:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ─── HEALTH CHECK ───────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђ HEALTH CHECK в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 app.get("/", (req, res) => {
-  res.json({
-    status: "🟢 MOTIV Bot activ",
-    version: "1.0.0",
-    timestamp: new Date().toISOString(),
-  });
+  res.json({ status: "рџџў MOTIV Bot activ", version: "2.0.0", timestamp: new Date().toISOString() });
 });
 
-// ─── START SERVER ───────────────────────────────────────────────────────────
 app.listen(CONFIG.PORT, () => {
-  console.log(`🚀 MOTIV Kommo Bot pornit pe portul ${CONFIG.PORT}`);
-  console.log(`📡 Webhook URL: http://localhost:${CONFIG.PORT}/webhook`);
+  console.log(`рџљЂ MOTIV Kommo Bot v2.0 pornit pe portul ${CONFIG.PORT}`);
 });
