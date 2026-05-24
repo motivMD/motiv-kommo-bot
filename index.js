@@ -109,10 +109,22 @@ async function sendMessageToKommo(leadId, message) {
 }
 
 // ─── WEBHOOK ENDPOINT ───────────────────────────────────────────────────────
+// Middleware să captureze raw body
+app.use("/webhook", (req, res, next) => {
+  let raw = "";
+  req.on("data", (chunk) => (raw += chunk));
+  req.on("end", () => {
+    req.rawBody = raw;
+    next();
+  });
+});
+
 app.post("/webhook", async (req, res) => {
   try {
     const body = req.body;
-    console.log("📩 Webhook primit:", JSON.stringify(body, null, 2));
+    console.log("📩 Headers:", JSON.stringify(req.headers, null, 2));
+    console.log("📩 Raw body:", req.rawBody);
+    console.log("📩 Parsed body:", JSON.stringify(body, null, 2));
 
     // Kommo trimite events de tip "message" sau "lead"
     const events = body?.leads?.update || body?.leads?.add || [];
