@@ -1,35 +1,63 @@
 const express = require("express");
 const axios = require("axios");
+const fs = require("fs");
+const path = require("path");
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// в”Ђв”Ђв”Ђ CONFIG в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 const CONFIG = {
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   KOMMO_API_KEY: process.env.KOMMO_API_KEY,
   KOMMO_SUBDOMAIN: process.env.KOMMO_SUBDOMAIN,
+  EXPORT_PASSWORD: process.env.EXPORT_PASSWORD || "motiv2026",
   PORT: process.env.PORT || 3000,
 };
 
-// в”Ђв”Ђв”Ђ BAZA DE CUNOИTINИљE MOTIV в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+const DB_FILE = "/tmp/conversations.json";
+
+// ─── DB SIMPLU ──────────────────────────────────────────────────────────────
+function loadDB() {
+  try {
+    if (fs.existsSync(DB_FILE)) return JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
+  } catch(e) {}
+  return { conversations: {} };
+}
+
+function saveDB(db) {
+  fs.writeFileSync(DB_FILE, JSON.stringify(db));
+}
+
+function saveMessage(talkId, leadId, type, text, author) {
+  const db = loadDB();
+  if (!db.conversations[talkId]) {
+    db.conversations[talkId] = { talk_id: talkId, lead_id: leadId, messages: [] };
+  }
+  db.conversations[talkId].messages.push({
+    type, text, author,
+    time: new Date().toISOString(),
+  });
+  saveDB(db);
+}
+
+// ─── BAZA DE CUNOȘTINȚE MOTIV ───────────────────────────────────────────────
 const MOTIV_KNOWLEDGE = `
-E™ti asistentul virtual al MOTIV вЂ” companie din Moldova specializatДѓ Г®n personalizarea hainelor И™i accesoriilor.
+E ti asistentul virtual al MOTIV — companie din Moldova specializată în personalizarea hainelor și accesoriilor.
 Site retail: motiv.md | Site corporate: business.motiv.md
 Slogan: "Fii DIFERIT. Fii UNIC."
 
-PRODUSE ИI PREИљURI:
+PRODUSE ȘI PREȚURI:
 - Tricouri personalizate: 250-340 MDL
 - Hanorace personalizate: 450-690 MDL
-- Pulovere, polo, accesorii (cДѓciuli, И™epci, rucsacuri, torbe, И™orИ›uri, sticle)
+- Pulovere, polo, accesorii (căciuli, șepci, rucsacuri, torbe, șorțuri, sticle)
 - Constructor online pe site pentru design personalizat
 
-COMENZI ИI LIVRARE:
-- Livrare Г®n toatДѓ Moldova
-- Comenzi retail (cantitate micДѓ): motiv.md
+COMENZI ȘI LIVRARE:
+- Livrare în toată Moldova
+- Comenzi retail (cantitate mică): motiv.md
 - Comenzi corporate/en-gros (minim 10 buc): business.motiv.md
-- OfertДѓ: 50 MDL reducere la prima comandДѓ
+- Ofertă: 50 MDL reducere la prima comandă
 
 PERSONALIZARE:
 - Design-uri unice prin constructorul online
@@ -37,22 +65,21 @@ PERSONALIZARE:
 - Print, broderie, transfer termic
 
 RETUR:
-- Retur acceptat Г®n 14 zile de la primire
-- Produsele personalizate nu se returneazДѓ (excepИ›ie: defect de producИ›ie)
+- Retur acceptat în 14 zile de la primire
+- Produsele personalizate nu se returnează (excepție: defect de producție)
 
-REGULI DE COMPORTAMENT:
-- DetecteazДѓ automat limba clientului (romГўnДѓ sau rusДѓ) И™i rДѓspunde Г®n ACEEAИI limbДѓ
-- Fii prietenos, tineresc, cu umor uИ™or вЂ” ca un prieten care recomandДѓ ceva cool
-- FoloseИ™te emoji moderat (1-2 per mesaj)
-- DacДѓ nu И™tii rДѓspunsul exact, spune cДѓ un coleg va reveni Г®n scurt timp
-- Nu inventa preИ›uri sau informaИ›ii pe care nu le ai
-- DacДѓ clientul vrea comandДѓ corporate (10+ bucДѓИ›i), direcИ›ioneazДѓ spre business.motiv.md
-- DacДѓ clientul vrea comandДѓ retail, direcИ›ioneazДѓ spre motiv.md
-- RДѓspunsurile sДѓ fie scurte И™i clare (max 3-4 propoziИ›ii)
-- RДѓspunde DOAR la mesaje de tip "incoming" (de la client), nu la cele outgoing
+REGULI:
+- Detectează automat limba clientului (română sau rusă) și răspunde în ACEEAȘI limbă
+- Fii prietenos, tineresc, cu umor ușor
+- Folosește emoji moderat (1-2 per mesaj)
+- Dacă nu știi răspunsul exact, spune că un coleg va reveni în scurt timp
+- Dacă clientul vrea comandă corporate (10+ bucăți), direcționează spre business.motiv.md
+- Dacă clientul vrea comandă retail, direcționează spre motiv.md
+- Răspunsurile să fie scurte și clare (max 3-4 propoziții)
+- Răspunde DOAR la mesaje de tip incoming
 `;
 
-// в”Ђв”Ђв”Ђ GENEREAZД‚ RД‚SPUNS CU CLAUDE в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─── CLAUDE ─────────────────────────────────────────────────────────────────
 async function generateReply(customerMessage) {
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -68,21 +95,15 @@ async function generateReply(customerMessage) {
       messages: [{ role: "user", content: customerMessage }],
     }),
   });
-
   const data = await response.json();
   if (data.error) throw new Error(data.error.message);
   return data.content[0].text;
 }
 
-// в”Ђв”Ђв”Ђ TRIMITE MESAJ ГЋNAPOI ГЋN KOMMO (ca outgoing message Г®n chat) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─── KOMMO ──────────────────────────────────────────────────────────────────
 async function sendMessageToKommo(talkId, message, subdomain) {
-  // Folosim endpoint-ul de talk messages pentru a rДѓspunde direct Г®n chat
   const url = `https://${subdomain}.kommo.com/api/v4/talks/${talkId}/messages`;
-  
-  await axios.post(url, {
-    text: message,
-    type: "outgoing",
-  }, {
+  await axios.post(url, { text: message, type: "outgoing" }, {
     headers: {
       Authorization: `Bearer ${CONFIG.KOMMO_API_KEY}`,
       "Content-Type": "application/json",
@@ -90,52 +111,91 @@ async function sendMessageToKommo(talkId, message, subdomain) {
   });
 }
 
-// в”Ђв”Ђв”Ђ WEBHOOK ENDPOINT в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─── WEBHOOK ─────────────────────────────────────────────────────────────────
 app.post("/webhook", async (req, res) => {
   try {
     const body = req.body;
     const messages = body?.message?.add || [];
 
     for (const msg of messages) {
-      // ProcesДѓm doar mesaje incoming (de la client)
-      if (msg.type !== "incoming") {
-        console.log(`вЏ­пёЏ Ignorat mesaj de tip: ${msg.type}`);
-        continue;
-      }
+      if (msg.type !== "incoming") continue;
 
       const text = msg.text;
       const talkId = msg.talk_id;
       const leadId = msg.element_id;
+      const author = msg.author?.name || "client";
 
-      if (!text || !talkId) {
-        console.log("вљ пёЏ Mesaj fДѓrДѓ text sau talk_id, ignorat");
-        continue;
-      }
+      if (!text || !talkId) continue;
 
-      console.log(`рџ’¬ Mesaj incoming (lead #${leadId}, talk #${talkId}): ${text}`);
+      console.log(`💬 (lead #${leadId}): ${text}`);
 
-      // GenereazДѓ rДѓspuns cu Claude
+      // Salvăm mesajul clientului
+      saveMessage(talkId, leadId, "incoming", text, author);
+
+      // Generăm răspuns
       const reply = await generateReply(text);
-      console.log(`рџ¤– RДѓspuns Claude: ${reply}`);
+      console.log(`🤖 Răspuns: ${reply}`);
 
-      // Trimite rДѓspunsul Г®n conversaИ›ia WhatsApp
+      // Salvăm răspunsul botului
+      saveMessage(talkId, leadId, "outgoing", reply, "MOTIV Bot");
+
+      // Trimitem în Kommo
       const subdomain = body?.account?.subdomain || CONFIG.KOMMO_SUBDOMAIN;
       await sendMessageToKommo(talkId, reply, subdomain);
-      console.log(`вњ… RДѓspuns trimis pentru talk #${talkId}`);
+      console.log(`✅ Trimis pentru talk #${talkId}`);
     }
 
     res.json({ status: "ok" });
   } catch (error) {
-    console.error("вќЊ Eroare:", error.message);
+    console.error("❌ Eroare:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-// в”Ђв”Ђв”Ђ HEALTH CHECK в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// ─── EXPORT CONVERSAȚII ──────────────────────────────────────────────────────
+app.get("/export", (req, res) => {
+  const pwd = req.query.password;
+  if (pwd !== CONFIG.EXPORT_PASSWORD) {
+    return res.status(401).json({ error: "Parolă greșită" });
+  }
+
+  const db = loadDB();
+  const conversations = Object.values(db.conversations);
+  const totalMessages = conversations.reduce((s, c) => s + c.messages.length, 0);
+  const incoming = conversations.flatMap(c => c.messages.filter(m => m.type === "incoming"));
+
+  // Top cuvinte
+  const words = incoming.map(m => m.text).join(" ").toLowerCase()
+    .replace(/[^\wăâîșțА-Яа-я\s]/g, " ")
+    .split(/\s+/).filter(w => w.length > 3);
+  const freq = {};
+  words.forEach(w => freq[w] = (freq[w] || 0) + 1);
+  const topWords = Object.entries(freq).sort((a,b) => b[1]-a[1]).slice(0, 30);
+
+  res.json({
+    stats: {
+      total_conversations: conversations.length,
+      total_messages: totalMessages,
+      incoming_messages: incoming.length,
+    },
+    top_words: topWords,
+    conversations,
+  });
+});
+
+// ─── HEALTH ──────────────────────────────────────────────────────────────────
 app.get("/", (req, res) => {
-  res.json({ status: "рџџў MOTIV Bot activ", version: "3.0.0", timestamp: new Date().toISOString() });
+  const db = loadDB();
+  const count = Object.keys(db.conversations).length;
+  res.json({
+    status: "🟢 MOTIV Bot activ",
+    version: "4.0.0",
+    conversations_saved: count,
+    export_url: "/export?password=motiv2026",
+    timestamp: new Date().toISOString(),
+  });
 });
 
 app.listen(CONFIG.PORT, () => {
-  console.log(`рџљЂ MOTIV Kommo Bot v3.0 pornit pe portul ${CONFIG.PORT}`);
+  console.log(`🚀 MOTIV Kommo Bot v4.0 pornit pe portul ${CONFIG.PORT}`);
 });
