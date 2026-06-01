@@ -1,5 +1,5 @@
 /**
- * MOTIV Kommo Bot v7.0
+ * MOTIV Kommo Bot v7.1
  * ────────────────────────────────────────────────────────────────────────
  * Schimbări față de v6:
  * ✅ Webhook răspunde 200 OK INSTANT (sub 100ms) — procesare async
@@ -16,6 +16,15 @@
  *    → Aprobare machetă, livrare, plată, modificări design, timing
  * ✅ Filter mesaje obviously-menu (defensive, în caz că vin din istoric)
  * ✅ Structured logging + error tracking
+ *
+ * Schimbări v7.1 (01 iun 2026):
+ * 🆕 SAVE-ALL, REPLY-ONLY-REALIZATE:
+ *    → Memorizează TOATE conversațiile din TOATE pipeline-urile (incoming + outgoing)
+ *    → Răspunde DOAR la incoming din pipeline REALIZATE (7694754)
+ *    → Cross-pipeline context: dacă client trece DESIGNER → REALIZATE,
+ *       botul are tot istoricul pre-existent
+ * 🆕 Outgoing dedup (anti-echo) — webhook-ul propriilor replies bot e ignorat
+ * 🆕 Manager replies salvate ca outgoing — context complet pentru AI
  * ────────────────────────────────────────────────────────────────────────
  */
 
@@ -75,6 +84,19 @@ function makeDedupKey(messageId, talkId, text) {
     .update(`${talkId || "no_talk"}|${text || ""}`)
     .digest("hex").substring(0, 16);
   return `hash:${textHash}:${minute}`;
+}
+
+// Dedup separat pentru outgoing — folosit ca să match-uim echo-urile de la
+// propriile noastre replies (după sendMessageToKommo, KOMMO firează webhook
+// înapoi cu type=outgoing pentru aceeași text). Bucket de 5 min pentru
+// toleranță la latență. Fără msg_id (pentru că webhook-ul are alt id decât
+// ce am sunat noi).
+function makeOutgoingDedupKey(talkId, text) {
+  const fiveMinBucket = Math.floor(Date.now() / (5 * 60000));
+  const textHash = crypto.createHash("sha256")
+    .update(`${talkId || "no_talk"}|${text || ""}|out`)
+    .digest("hex").substring(0, 16);
+  return `out:${textHash}:${fiveMinBucket}`;
 }
 
 async function isProcessed(dedupKey) {
@@ -379,74 +401,95 @@ async function sendMessageToKommo(talkId, message, subdomain) {
 }
 
 // ─── WEBHOOK HANDLER (ASYNC) ─────────────────────────────────────────────
+// Strategie v7.1:
+//   1. SAVE-ALL — orice mesaj valid (incoming sau outgoing manager) e salvat
+//      în Supabase, INDIFERENT de pipeline. Asta ne dă cross-pipeline context.
+//   2. REPLY-ONLY-REALIZATE — Claude generează răspuns DOAR pentru mesaje
+//      incoming din pipeline REALIZATE (7694754).
+//   3. Anti-echo — replies bot-ului care vin înapoi prin webhook sunt
+//      ignorate (deja salvate de noi după sendMessageToKommo).
 async function processWebhook(body) {
   const messages = body?.message?.add || [];
   const subdomain = body?.account?.subdomain || CONFIG.KOMMO_SUBDOMAIN;
 
   for (const msg of messages) {
     try {
-      if (msg.type !== "incoming") continue;
-
       const messageId = msg.id;
       const text = msg.text;
       const talkId = msg.talk_id;
       const leadId = msg.element_id;
-      const author = msg.author?.name || "client";
+      const msgType = msg.type; // "incoming" sau "outgoing"
+      const author = msg.author?.name || (msgType === "incoming" ? "client" : "manager");
 
       if (!text || !talkId) {
         console.log(`⏭️  Skip (lipsă text sau talkId)`);
         continue;
       }
 
-      // 1. Filter mesaje meniu
-      if (isMenuMessage(text)) {
+      // 1. Filter mesaje meniu — doar pentru INCOMING.
+      //    Manager poate trimite legitim mesaje scurte ("OK", "👍") — nu le filtrăm.
+      if (msgType === "incoming" && isMenuMessage(text)) {
         console.log(`⏭️  Skip menu/empty: "${text.substring(0, 40)}"`);
         continue;
       }
 
-      // 2. Deduplicare composite
-      const dedupKey = makeDedupKey(messageId, talkId, text);
+      // 2. Dedup — chei diferite pentru incoming vs outgoing
+      //    Outgoing folosește bucket de 5min ca să prindă echo-urile propriilor replies
+      const dedupKey = msgType === "outgoing"
+        ? makeOutgoingDedupKey(talkId, text)
+        : makeDedupKey(messageId, talkId, text);
+
       if (await isProcessed(dedupKey)) {
-        console.log(`⏭️  Skip dup: ${dedupKey}`);
+        console.log(`⏭️  Skip dup [${msgType}]: ${dedupKey.substring(0, 30)}`);
+        continue;
+      }
+      await markProcessed(dedupKey);
+
+      // 3. 💾 SAVE — TOATE pipeline-urile, AMBELE direcții
+      await saveMessage(talkId, leadId, msgType, text, author);
+      console.log(`💾 [${msgType}] talk #${talkId} lead #${leadId} (${author}): ${text.substring(0, 80)}`);
+
+      // ────── De aici încolo: doar pentru INCOMING generăm reply ──────
+      if (msgType !== "incoming") {
+        // Outgoing (manager reply sau echo bot) — salvat, nu răspundem
         continue;
       }
 
-      // 3. Pipeline check
+      // 4. Pipeline check — REPLY doar dacă e în REALIZATE
       if (leadId) {
         const allowed = await isInAllowedPipeline(leadId, subdomain);
         if (!allowed) {
-          console.log(`🚫 Lead #${leadId} nu e în REALIZATE`);
+          console.log(`🤐 Lead #${leadId} NOT REALIZATE — mesaj salvat, fără răspuns`);
           continue;
         }
       }
 
-      // 4. Rate limit
+      // 5. Rate limit per talk_id
       if (!(await canRespond(talkId))) {
         console.log(`⏱️  Rate limit talk #${talkId} (sub ${CONFIG.RATE_LIMIT_SECONDS}s de la ultim răspuns)`);
         continue;
       }
 
-      // Mark processed (după toate filtrele, înainte de Claude)
-      await markProcessed(dedupKey);
+      console.log(`💬 [REPLY-FLOW] lead #${leadId} talk #${talkId}: ${text.substring(0, 100)}`);
 
-      // Salvăm mesajul incoming
-      await saveMessage(talkId, leadId, "incoming", text, author);
-
-      console.log(`💬 lead #${leadId} talk #${talkId}: ${text.substring(0, 100)}`);
-
-      // 5. Load history pentru context
+      // 6. Load history pentru context (cross-pipeline!)
       const history = await getConversationHistory(talkId, CONFIG.MAX_HISTORY_MESSAGES);
-      // Exclude mesajul curent din history (ultimul, just saved)
+      // Exclude mesajul curent (deja salvat) din history
       const historyForClaude = history.slice(0, -1);
 
-      // 6. Generate reply
+      // 7. Generate reply
       const reply = await generateReply(text, historyForClaude);
       console.log(`🤖 reply: ${reply.substring(0, 100)}`);
 
-      // 7. Send to KOMMO
+      // 8. Send to KOMMO
       await sendMessageToKommo(talkId, reply, subdomain);
 
-      // 8. Save outgoing + mark rate limit
+      // 9. Pre-mark echo dedup — când KOMMO va fira webhook înapoi cu acest
+      //    text ca type=outgoing, dedup-ul va match și va sări peste salvarea dublă.
+      const echoKey = makeOutgoingDedupKey(talkId, reply);
+      await markProcessed(echoKey);
+
+      // 10. Save outgoing reply (proprie) + rate limit
       await saveMessage(talkId, leadId, "outgoing", reply, "MOTIV Bot");
       await markResponded(talkId);
 
@@ -524,9 +567,11 @@ app.get("/export", async (req, res) => {
 // Health check
 app.get("/", (req, res) => {
   res.json({
-    status: "🟢 MOTIV Bot v7 activ",
-    version: "7.0.0",
-    allowed_pipeline: ALLOWED_PIPELINE_ID,
+    status: "🟢 MOTIV Bot v7.1 activ",
+    version: "7.1.0",
+    mode: "SAVE-ALL, REPLY-ONLY-REALIZATE",
+    save_scope: "TOATE pipeline-urile (cross-pipeline context)",
+    reply_pipeline: ALLOWED_PIPELINE_ID,
     storage: useSupabase ? "Supabase" : "in-memory (⚠️ datele se pierd la restart)",
     model: CONFIG.CLAUDE_MODEL,
     config: {
@@ -556,10 +601,11 @@ app.post("/admin/clear-rate-limit", async (req, res) => {
 
 // ─── START ───────────────────────────────────────────────────────────────
 app.listen(CONFIG.PORT, () => {
-  console.log(`🚀 MOTIV Kommo Bot v7.0 pornit pe portul ${CONFIG.PORT}`);
-  console.log(`🎯 Răspunde DOAR în pipeline: ${ALLOWED_PIPELINE_ID} (REALIZATE)`);
-  console.log(`💾 Storage: ${useSupabase ? "Supabase persistent" : "in-memory (volatil)"}`);
+  console.log(`🚀 MOTIV Kommo Bot v7.1 pornit pe portul ${CONFIG.PORT}`);
+  console.log(`💾 SAVE: TOATE pipeline-urile (incoming + outgoing manager)`);
+  console.log(`🎯 REPLY: DOAR pipeline ${ALLOWED_PIPELINE_ID} (REALIZATE)`);
+  console.log(`🗄️  Storage: ${useSupabase ? "Supabase persistent" : "in-memory (volatil)"}`);
   console.log(`🤖 Model: ${CONFIG.CLAUDE_MODEL}`);
   console.log(`⏱️  Rate limit: 1 răspuns / ${CONFIG.RATE_LIMIT_SECONDS}s / talk_id`);
-  console.log(`📚 History: ultimele ${CONFIG.MAX_HISTORY_MESSAGES} mesaje`);
+  console.log(`📚 History: ultimele ${CONFIG.MAX_HISTORY_MESSAGES} mesaje (cross-pipeline)`);
 });
