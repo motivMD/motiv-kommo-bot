@@ -514,25 +514,62 @@ app.post("/webhook", (req, res) => {
   });
 });
 
-// Export endpoint (păstrat din v6, îmbunătățit)
+// ─── HELPER: fetch ALL messages cu paginare (Supabase JS default limit = 1000)
+async function fetchAllMessages({ since = null, order = "desc", maxRows = 50000 } = {}) {
+  if (!useSupabase) return [];
+  const PAGE = 1000;
+  const all = [];
+  let from = 0;
+  while (from < maxRows) {
+    let q = supabase
+      .from("messages")
+      .select("*")
+      .order("created_at", { ascending: order === "asc" })
+      .range(from, from + PAGE - 1);
+    if (since) q = q.gte("created_at", since);
+    const { data, error } = await q;
+    if (error) { console.error("❌ fetchAllMessages:", error.message); break; }
+    if (!data || data.length === 0) break;
+    all.push(...data);
+    if (data.length < PAGE) break;
+    from += PAGE;
+  }
+  return all;
+}
+
+// Export endpoint (FIX v7.2: DESC + paginare 5000 + suport ?since=YYYY-MM-DD & ?limit_conv=N)
 app.get("/export", async (req, res) => {
   if (req.query.password !== CONFIG.EXPORT_PASSWORD) {
     return res.status(401).json({ error: "Parolă greșită" });
   }
 
+  const since = req.query.since || null; // ex: 2026-08-01
+  const limitConv = parseInt(req.query.limit_conv || "0", 10); // limitare număr conversații în răspuns
+  const maxRows = Math.min(parseInt(req.query.max || "20000", 10), 50000);
+
+  let allMsgs = [];
+  if (useSupabase) {
+    // Fetch DESC ca să avem întotdeauna cele mai NOI mesaje
+    allMsgs = await fetchAllMessages({ since, order: "desc", maxRows });
+    // Reordonăm ASC pentru grupare cronologică per conv
+    allMsgs.reverse();
+  }
+
   let conversations = [];
   if (useSupabase) {
-    const { data } = await supabase
-      .from("messages")
-      .select("*")
-      .order("created_at", { ascending: true })
-      .limit(5000);
     const grouped = {};
-    for (const m of (data || [])) {
+    for (const m of allMsgs) {
       if (!grouped[m.talk_id]) grouped[m.talk_id] = { talk_id: m.talk_id, lead_id: m.lead_id, messages: [] };
       grouped[m.talk_id].messages.push({ type: m.type, text: m.text, author: m.author, time: m.created_at });
     }
     conversations = Object.values(grouped);
+    // Sortează conv după ultimul mesaj (cele mai recente primele)
+    conversations.sort((a, b) => {
+      const la = a.messages[a.messages.length - 1]?.time || "";
+      const lb = b.messages[b.messages.length - 1]?.time || "";
+      return lb.localeCompare(la);
+    });
+    if (limitConv > 0) conversations = conversations.slice(0, limitConv);
   } else {
     conversations = Array.from(memDB.conversations.values());
   }
@@ -549,6 +586,10 @@ app.get("/export", async (req, res) => {
   words.forEach(w => freq[w] = (freq[w] || 0) + 1);
   const topWords = Object.entries(freq).sort((a, b) => b[1] - a[1]).slice(0, 30);
 
+  // Date range
+  const times = conversations.flatMap(c => c.messages.map(m => m.time)).filter(Boolean).sort();
+  const dateRange = times.length > 0 ? { first: times[0], last: times[times.length - 1] } : null;
+
   res.json({
     stats: {
       total_conversations: conversations.length,
@@ -556,19 +597,108 @@ app.get("/export", async (req, res) => {
       incoming_messages: incoming.length,
       outgoing_messages: outgoing.length,
       reply_rate: incoming.length > 0 ? ((outgoing.length / incoming.length) * 100).toFixed(1) + "%" : "N/A",
+      date_range: dateRange,
+      filters: { since, limit_conv: limitConv, max_rows: maxRows },
     },
     top_words: topWords,
     storage: useSupabase ? "Supabase" : "in-memory",
-    version: "7.0.0",
+    version: "7.2.0",
     conversations,
   });
+});
+
+// ─── STATS LIVE — count rapid fără să tragă tot payload-ul
+app.get("/stats-live", async (req, res) => {
+  if (req.query.password !== CONFIG.EXPORT_PASSWORD) {
+    return res.status(401).json({ error: "Parolă greșită" });
+  }
+  if (!useSupabase) {
+    return res.json({ storage: "in-memory", note: "Nu există Supabase configurat" });
+  }
+  try {
+    // Total count (fără să aducă rânduri)
+    const { count: totalCount } = await supabase
+      .from("messages")
+      .select("*", { count: "exact", head: true });
+
+    // Count incoming
+    const { count: incomingCount } = await supabase
+      .from("messages")
+      .select("*", { count: "exact", head: true })
+      .eq("type", "incoming");
+
+    // Count outgoing
+    const { count: outgoingCount } = await supabase
+      .from("messages")
+      .select("*", { count: "exact", head: true })
+      .eq("type", "outgoing");
+
+    // Ultimele 24h
+    const yesterday = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
+    const { count: last24h } = await supabase
+      .from("messages")
+      .select("*", { count: "exact", head: true })
+      .gte("created_at", yesterday);
+
+    // Ultimele 7 zile
+    const week = new Date(Date.now() - 7 * 24 * 3600 * 1000).toISOString();
+    const { count: last7d } = await supabase
+      .from("messages")
+      .select("*", { count: "exact", head: true })
+      .gte("created_at", week);
+
+    // Ultimul mesaj real
+    const { data: lastMsg } = await supabase
+      .from("messages")
+      .select("created_at, talk_id, type, author, text")
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    // Primul mesaj real
+    const { data: firstMsg } = await supabase
+      .from("messages")
+      .select("created_at, talk_id")
+      .order("created_at", { ascending: true })
+      .limit(1);
+
+    // Conversații unice
+    const { data: convSample } = await supabase
+      .from("messages")
+      .select("talk_id")
+      .not("talk_id", "is", null);
+    const uniqueTalks = new Set((convSample || []).map(r => r.talk_id)).size;
+
+    res.json({
+      status: "🟢 stats-live",
+      timestamp: new Date().toISOString(),
+      counts: {
+        total_messages: totalCount,
+        incoming: incomingCount,
+        outgoing: outgoingCount,
+        unique_conversations: uniqueTalks,
+        last_24h: last24h,
+        last_7d: last7d,
+      },
+      health: {
+        webhook_active: (last24h || 0) > 0,
+        replies_working: (outgoingCount || 0) > 0,
+        last_message: lastMsg?.[0] || null,
+        first_message: firstMsg?.[0] || null,
+      },
+      storage: "Supabase",
+      version: "7.2.0",
+    });
+  } catch (err) {
+    console.error("❌ stats-live:", err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // Health check
 app.get("/", (req, res) => {
   res.json({
-    status: "🟢 MOTIV Bot v7.1 activ",
-    version: "7.1.0",
+    status: "🟢 MOTIV Bot v7.2 activ",
+    version: "7.2.0",
     mode: "SAVE-ALL, REPLY-ONLY-REALIZATE",
     save_scope: "TOATE pipeline-urile (cross-pipeline context)",
     reply_pipeline: ALLOWED_PIPELINE_ID,
